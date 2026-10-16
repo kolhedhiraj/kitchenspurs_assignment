@@ -1,0 +1,15 @@
+{
+  "name": "analytics-sdk-dashboard",
+  "private": true,
+  "workspaces": ["apps/dashboard", "apps/restaurant", "packages/browser-sdk"],
+  "scripts": {
+    "dev:dashboard": "npm run build --workspace @analytics/browser-sdk && npm run dev --workspace @analytics/dashboard",
+    "dev:restaurant": "npm run build --workspace @analytics/browser-sdk && npm run dev --workspace @analytics/restaurant",
+    "build:sdk": "npm run build --workspace @analytics/browser-sdk",
+    "build:dashboard": "npm run build:sdk && npm run build --workspace @analytics/dashboard",
+    "build:restaurant": "npm run build:sdk && npm run build --workspace @analytics/restaurant",
+    "build": "npm run build:sdk && npm run build --workspace @analytics/dashboard && npm run build --workspace @analytics/restaurant",
+    "typecheck": "npm run build:sdk && npm run typecheck --workspaces --if-present",
+    "test": "npm run build:sdk && npm run test --workspaces --if-present"
+  }
+}
