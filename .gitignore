@@ -11,6 +11,7 @@ apps/api/storage/logs/*
 apps/api/storage/framework/cache/data/*
 apps/api/storage/framework/sessions/*
 apps/api/storage/framework/views/*
+apps/api/public/storage
 apps/api/bootstrap/cache/*.php
 !apps/api/storage/logs/.gitignore
 !apps/api/storage/framework/cache/data/.gitignore

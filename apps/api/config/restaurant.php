@@ -2,6 +2,8 @@
 
 return [
     'currency' => 'INR',
+    'management_key' => env('MENU_MANAGEMENT_KEY'),
+    'categories' => ['Starters', 'Main Course', 'Pizza', 'Burgers', 'Pasta', 'Salads', 'Sides', 'Drinks', 'Desserts'],
     'menu' => [
         ['id' => 'pizza-margherita', 'name' => 'Margherita Pizza', 'category' => 'Pizza', 'description' => 'Tomato, mozzarella, basil.', 'price' => 349],
         ['id' => 'burger-classic', 'name' => 'Classic Burger', 'category' => 'Burgers', 'description' => 'Grilled patty, lettuce, tomato, house sauce.', 'price' => 299],

@@ -4,15 +4,18 @@ import { useEffect, useMemo, useState } from "react";
 import type { AnalyticsReport, EventTrend } from "@/lib/types";
 import { debugLoadingDuration, waitForDebugLoading } from "@/lib/debugLoading";
 import Loader from "@/components/Loader";
+import MenuManagement from "@/components/MenuManagement";
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000").replace(/\/$/, "");
 type Range = "today" | "yesterday" | "7d" | "30d" | "custom";
-type View = "overview" | "traffic" | "pages" | "events";
+type View = "overview" | "traffic" | "pages" | "events" | "orders" | "menu";
 const navigation: { id: View; label: string; icon: string }[] = [
   { id: "overview", label: "Overview", icon: "◫" },
   { id: "traffic", label: "Traffic", icon: "⌁" },
   { id: "pages", label: "Pages", icon: "▤" },
   { id: "events", label: "Events", icon: "◷" },
+  { id: "orders", label: "Orders", icon: "▣" },
+  { id: "menu", label: "Menu", icon: "▤" },
 ];
 
 function utcDate(date: Date): string {
@@ -38,6 +41,8 @@ const titles: Record<View, { title: string; description: string }> = {
   traffic: { title: "Traffic", description: "Explore page visits and returning audience patterns." },
   pages: { title: "Pages", description: "See which parts of the restaurant experience guests visit." },
   events: { title: "Events", description: "Review activity captured across the customer journey." },
+  orders: { title: "Orders", description: "Review restaurant orders and update their progress." },
+  menu: { title: "Menu Management", description: "Manage your restaurant’s food items, prices and availability." },
 };
 
 export default function Dashboard() {
@@ -111,7 +116,7 @@ export default function Dashboard() {
         </div>
       </header>
 
-      {report && !loading && !error && <p className="range-caption">Reporting {dateLabel(report.from)} – {dateLabel(report.to)} <span>· All dates in UTC</span></p>}
+      {view === "orders" ? <Orders /> : view === "menu" ? <MenuManagement /> : <>{report && !loading && !error && <p className="range-caption">Reporting {dateLabel(report.from)} – {dateLabel(report.to)} <span>· All dates in UTC</span></p>}
       {error && <div className="notice error" role="alert"><div><strong>Could not load analytics</strong><span>{error}</span></div><button onClick={() => setRetry((value) => value + 1)}>Retry</button></div>}
       {loading && <DashboardSkeleton view={view} />}
       {!loading && !error && report && <>
@@ -121,7 +126,7 @@ export default function Dashboard() {
           {view === "pages" && <Pages report={report} />}
           {view === "events" && <Events report={report} />}
         </>}
-      </>}
+      </>}</>}
     </main>
   </div>;
 }
@@ -145,6 +150,51 @@ function Overview({ report }: { report: AnalyticsReport }) {
     </div>
   </>;
 }
+
+type OrderStatus = "pending" | "confirmed" | "preparing" | "out_for_delivery" | "delivered" | "cancelled";
+type DashboardOrder = { id: number; status: OrderStatus; status_label: string; amount: number; currency: string; items_count: number; created_at: string; updated_at: string; items: { item_id: string; name: string; quantity: number; line_total: number }[] };
+const statusLabels: Record<OrderStatus, string> = { pending: "Pending", confirmed: "Confirmed", preparing: "Preparing", out_for_delivery: "Out for Delivery", delivered: "Delivered", cancelled: "Cancelled" };
+const transitions: Record<OrderStatus, OrderStatus[]> = { pending: ["confirmed", "cancelled"], confirmed: ["preparing", "cancelled"], preparing: ["out_for_delivery", "cancelled"], out_for_delivery: ["delivered"], delivered: [], cancelled: [] };
+
+function Orders() {
+  const [orders, setOrders] = useState<DashboardOrder[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<number | null>(null);
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    let active = true;
+    async function load() {
+      try {
+        const response = await fetch(`${API_URL}/api/v1/orders`, { cache: "no-store" });
+        if (!response.ok) throw new Error(`Orders API returned ${response.status}.`);
+        const body = await response.json() as { orders: DashboardOrder[] };
+        if (active) { setOrders(body.orders); setError(null); }
+      } catch (reason) { if (active) setError(reason instanceof Error ? reason.message : "Unable to load orders."); }
+      finally { if (active) setLoading(false); }
+    }
+    void load();
+    const timer = window.setInterval(() => { void load(); }, 10000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [retry]);
+  async function update(order: DashboardOrder, status: OrderStatus) {
+    setBusy(order.id); setError(null);
+    try {
+      const response = await fetch(`${API_URL}/api/v1/orders/${order.id}/status`, { method: "PATCH", headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify({ status }) });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.message ?? "Could not update order status.");
+      setOrders((current) => current.map((item) => item.id === order.id ? body.order as DashboardOrder : item));
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not update order status."); }
+    finally { setBusy(null); }
+  }
+  if (loading) return <div className="dashboard-skeleton" role="status" aria-label="Loading orders"><section className="panel"><PanelHeading eyebrow="ORDERS" title="Loading orders" detail="Fetching the latest restaurant orders"/><Loader size="sm"/></section></div>;
+  return <section className="panel order-report"><PanelHeading eyebrow="RESTAURANT" title="Orders" detail="Latest 100 orders · refreshes every 10 seconds" />
+    {error && <div className="notice error" role="alert"><div><strong>Order request failed</strong><span>{error}</span></div><button onClick={() => setRetry((value) => value + 1)}>Retry</button></div>}
+    {!orders.length && !error ? <InlineEmpty>No orders yet. Place an order in the restaurant demo to see it here.</InlineEmpty> : <div className="order-list">{orders.map((order) => <article className="admin-order" key={order.id}><div className="admin-order-heading"><div><strong>Order #{order.id}</strong><span>Created {new Date(order.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</span><span>Updated {new Date(order.updated_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</span></div><span className={`order-status-badge ${order.status}`}>{order.status_label}</span></div><p className="admin-order-items">{order.items.map((item) => `${item.name} × ${item.quantity}`).join(" · ")}</p><div className="admin-order-footer"><strong>{formatMoney(order.amount, order.currency)}</strong><label>Status <select aria-label={`Status for order ${order.id}`} value={order.status} disabled={busy === order.id || transitions[order.status].length === 0} onChange={(event) => void update(order, event.target.value as OrderStatus)}><option value={order.status}>{statusLabels[order.status]}</option>{transitions[order.status].map((status) => <option value={status} key={status}>{statusLabels[status]}</option>)}</select></label></div></article>)}</div>}
+  </section>;
+}
+
+function formatMoney(amount: number, currency: string) { return new Intl.NumberFormat("en-IN", { style: "currency", currency, maximumFractionDigits: 0 }).format(amount); }
 
 function Traffic({ report }: { report: AnalyticsReport }) {
   return <>

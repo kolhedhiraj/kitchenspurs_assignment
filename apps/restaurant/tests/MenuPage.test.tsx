@@ -54,4 +54,14 @@ describe("MenuPage", () => {
     expect(screen.queryByRole("heading", { name: "Lemon Pasta" })).not.toBeInTheDocument();
     expect(track).toHaveBeenCalledTimes(1);
   });
+
+  it("shows unavailable food but prevents adding it to the cart", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ currency: "INR", items: [
+      { id: "soup", name: "Garden Soup", category: "Starters", description: "Greens and herbs", price: 180, image_url: null, is_available: false },
+    ] }) }));
+    render(<CartProvider><MenuPage /></CartProvider>);
+    expect(await screen.findByRole("heading", { name: "Garden Soup" })).toBeInTheDocument();
+    expect(screen.getByText("Currently unavailable")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add Garden Soup to cart" })).toBeDisabled();
+  });
 });

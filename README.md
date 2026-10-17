@@ -36,8 +36,8 @@ Processing is synchronous; there is no queue or durable outbox. Stored event tim
 
 | Component | Technology | Purpose |
 | --- | --- | --- |
-| API | Laravel 12, PHP 8.3+ | Ingestion, menu/orders, analytics aggregates |
-| Database | PostgreSQL 16 (postgres:16-alpine) | Events, orders, order items |
+| API | Laravel 12, PHP 8.3+ | Ingestion, database-backed menu/orders, analytics aggregates |
+| Database | PostgreSQL 16 (postgres:16-alpine) | Events, menu items, orders, order items |
 | Restaurant | Next.js 16, React 19, TypeScript | Customer demo and SDK integration |
 | Dashboard | Next.js 16, React 19, TypeScript | Date-filtered analytics UI |
 | SDK | TypeScript npm workspace | Browser identity, event envelope, delivery |
@@ -83,11 +83,12 @@ Copy examples without overwriting existing local files:
 | API SERVER_INGESTION_KEY | Server-only key; never expose to browser code. |
 | API ANALYTICS_API_URL | Event endpoint used by Laravel server tracking. |
 | API CORS_ALLOWED_ORIGINS | Comma-separated allowed frontend origins. |
+| API MENU_MANAGEMENT_KEY | Server-only random key required for menu management; entered in the dashboard and never bundled into frontend code. |
 | Frontends NEXT_PUBLIC_API_URL | Browser-accessible API base, normally http://localhost:8000. |
 | Restaurant NEXT_PUBLIC_ANALYTICS_API_KEY | Public browser ingestion key. |
 | Restaurant NEXT_PUBLIC_ANALYTICS_APPLICATION_ID | Application ID included in SDK events. |
 
-The .env.example files contain local development defaults. Change them for a shared environment and set APP_DEBUG=false outside local development. Never commit .env/.env.local, database credentials, or SERVER_INGESTION_KEY; only the browser key is intentionally exposed to frontend code.
+The .env.example files contain local development defaults. Set `MENU_MANAGEMENT_KEY` in `apps/api/.env` to a random secret of at least 32 characters; menu management remains disabled if it is missing or too short. Change local credentials for shared environments and set APP_DEBUG=false outside local development. Never commit .env/.env.local, database credentials, the menu key, or SERVER_INGESTION_KEY; only the browser analytics key is intentionally exposed to browser code.
 
 ## Local setup
 
@@ -100,6 +101,8 @@ npm ci
 [ -f apps/dashboard/.env.local ] || cp apps/dashboard/.env.example apps/dashboard/.env.local
 docker compose up -d --build
 grep -q '^APP_KEY=.' apps/api/.env || docker compose exec api php artisan key:generate
+docker compose exec api php artisan optimize:clear
+docker compose exec api php artisan storage:link
 docker compose exec api php artisan migrate --seed
 ~~~
 
@@ -152,8 +155,16 @@ Base URL: http://localhost:8000/api/v1; health is /up. CORS permits configured f
 | Method/path | Purpose | Authentication/limit |
 | --- | --- | --- |
 | GET /up | Health/status | None |
-| GET /api/v1/menu | Configured catalog and currency | None |
-| POST /api/v1/orders | Validate items, calculate prices, persist order/items, attempt order_created | Demo endpoint; 30/minute |
+| GET /api/v1/menu | Database-backed menu, availability and image URLs | None |
+| GET /api/v1/admin/menu-items | List menu items and categories | X-Menu-Management-Key |
+| GET /api/v1/admin/menu-items/{id} | Retrieve one menu item | X-Menu-Management-Key |
+| POST /api/v1/admin/menu-items | Create an item and upload its image | X-Menu-Management-Key; 30/minute |
+| PATCH /api/v1/admin/menu-items/{id} | Update item fields and optionally replace its image | X-Menu-Management-Key; 30/minute |
+| PATCH /api/v1/admin/menu-items/{id}/availability | Change customer availability | X-Menu-Management-Key; 60/minute |
+| DELETE /api/v1/admin/menu-items/{id} | Soft-delete an item while keeping historical order snapshots | X-Menu-Management-Key; 30/minute |
+| POST /api/v1/orders | Validate available database items, calculate database prices, persist snapshots, attempt order_created | Demo endpoint; 30/minute |
+| GET /api/v1/orders, GET /api/v1/orders/{id} | List latest 100 orders or retrieve an order and its items/status | Unauthenticated demo |
+| PATCH /api/v1/orders/{id}/status | Validate and persist an allowed order transition, then attempt its business event | Unauthenticated demo; 60/minute |
 | POST /api/v1/events | Persist one event idempotently | X-Analytics-Key; 120/minute |
 | GET /api/v1/analytics/overview?from=YYYY-MM-DD&to=YYYY-MM-DD | Database-backed report | Unauthenticated in local demo |
 
@@ -182,7 +193,7 @@ New events return 202; duplicate IDs return 200 with duplicate true. Invalid/mis
 curl -i http://localhost:8000/api/v1/orders -H 'Content-Type: application/json' -H 'Accept: application/json' --data '{"items":[{"item_id":"pizza-margherita","quantity":1},{"item_id":"fries-classic","quantity":1}]}'
 ~~~
 
-items contains 1–20 entries; IDs must exist in the server catalog and quantities must be 1–20. The API calculates prices/currency and returns HTTP 201 with persisted order/item details. No payment or customer details are accepted.
+items contains 1–20 entries; IDs must exist in the menu database, be available, and quantities must be 1–20. The API calculates prices/currency from the database and returns HTTP 201 with persisted order/item details. No payment or customer details are accepted. Order-item rows snapshot the purchased name and unit/line prices, so later menu edits do not change historical orders.
 
 ### Analytics report
 
@@ -251,7 +262,15 @@ Dashboard ranges are Today, Yesterday, Last 7 days, Last 30 days, and custom UTC
 
 ## Restaurant demo and order flow
 
-Laravel serves the configured menu. Customers filter categories, adjust cart quantities, and submit item IDs/quantities at checkout. Cart state is browser-local and persisted in localStorage; it is not an order record. The server calculates prices and transactionally persists order/items before synchronous best-effort order_created delivery. Tracking failure is logged and does not fail the committed order. Delivery uses a one-second connect timeout and two-second request timeout, with no durable queue/outbox; an event can be lost during an outage.
+Laravel serves a database-backed menu. Customers filter categories, view item images/descriptions/availability, adjust cart quantities, and submit item IDs/quantities at checkout. Unavailable items remain visible but cannot be added; checkout and the API also enforce availability. Cart state is browser-local and persisted in localStorage; it is not an order record. The server locks menu rows, calculates current database prices, and transactionally persists order-item snapshots before synchronous best-effort order_created delivery. Tracking failure is logged and does not fail the committed order. Delivery uses a one-second connect timeout and two-second request timeout, with no durable queue/outbox; an event can be lost during an outage.
+
+### Menu management
+
+Dashboard → Menu lists the catalog and supports adding, editing, soft-deleting and changing availability. Images use Laravel's local public disk at `storage/app/public/menu`; run `php artisan storage:link` in the API container so they are served from `/storage`. Uploads accept JPEG, PNG or WebP up to 5 MB. Deleted items are excluded from customer menus, while historical order rows retain their purchased names and prices. Admin endpoints require the server-only `MENU_MANAGEMENT_KEY` header; the dashboard asks the operator to enter it and does not bundle it. Set a random 32+ character value in `apps/api/.env`, then run `docker compose exec api php artisan optimize:clear`. This shared-key mechanism is for the assignment demo, not a production user-account system.
+
+### Order lifecycle
+
+Customer checkout creates a Pending order and links to `/order/{id}` for its itemized status page. The page polls the order API every seven seconds until the order is delivered or cancelled. Admins can open Dashboard → Orders to review the latest 100 orders and update their status. Supported statuses are Pending → Confirmed → Preparing → Out for Delivery → Delivered; cancellation is allowed while pending, confirmed, or preparing. Status changes are recorded through the existing server event ingestion client as `order_confirmed`, `order_preparing`, `order_out_for_delivery`, `order_delivered`, or `order_cancelled` events; repeated updates do not emit duplicate events. This is an intentionally lightweight demonstration workflow, not a production delivery-tracking system. The demo has no authentication, so status administration must not be exposed publicly.
 
 ## Technical decisions
 
@@ -262,7 +281,7 @@ Laravel serves the configured menu. Customers filter categories, adjust cart qua
 | Unique event UUID plus DB constraint | Idempotent concurrent retries. | Retrying callers should reuse event IDs. |
 | UTC timestamps and inclusive UTC date ranges | Consistent storage and grouping. | Not visitor-local timezone reporting. |
 | Synchronous best-effort delivery | Small system without queue infrastructure. | Events may be lost; order response may wait up to timeout. |
-| Fixed server-owned menu | Demonstrates trusted pricing without admin functionality. | No menu editing, inventory, payment, or fulfillment. |
+| Database-backed menu and server-owned order snapshots | Supports menu management while keeping order totals and historical purchase details trusted. | Shared-key demo authorization, no inventory or payment. |
 
 This demo uses one application ID and no user login. Menu/order and report endpoints are unauthenticated; add authorization before public deployment.
 
@@ -271,13 +290,13 @@ This demo uses one application ID and no user login. Menu/order and report endpo
 - One configured application ID is sufficient for the demo; it is not a multi-tenant key registry.
 - Visitor identity is anonymous and browser-local. Cross-device identity and sessions are outside this demo.
 - Dates selected in the dashboard refer to UTC calendar days.
-- Menu content/prices are server configuration and order submission is a pickup demo without payment or contact information.
+- Menu records/prices are database-backed and order submission is a pickup demo without payment or contact information.
 
 ### Tradeoffs
 
 - Synchronous PostgreSQL aggregation keeps the system understandable and avoids extra infrastructure, but query-time aggregation is not designed for large event volumes.
 - Browser and server tracking use best-effort HTTP delivery. The server order commits first, but events may be lost during an outage because there is no durable queue or transactional outbox.
-- Dashboard reads and demo menu/order APIs are unauthenticated for local use. Public deployment requires authentication/authorization and operational hardening.
+- Dashboard reports, customer menu/orders and order-status APIs are unauthenticated for local use. Menu-management writes require a shared server key. Public deployment requires user authentication/authorization and operational hardening.
 
 ## Known limitations
 
@@ -286,7 +305,7 @@ This demo uses one application ID and no user login. Menu/order and report endpo
 - Basic framework rate limiting, no advanced bot filtering or consent manager.
 - PostgreSQL report aggregation reads raw events; there are no rollups, retention jobs, or high-volume scaling provisions.
 - Browser anonymous identity is lost if localStorage is cleared or unavailable.
-- Restaurant functionality intentionally excludes payment processing, inventory, menu administration, and fulfillment management.
+- Restaurant functionality intentionally excludes payment processing, inventory management, and fulfillment management.
 
 ## Security and privacy
 
@@ -296,7 +315,7 @@ This demo uses one application ID and no user login. Menu/order and report endpo
 - Eloquent/query-builder bindings are used for database access.
 - CORS uses an explicit configured origin list.
 - No raw IP, payment data, or customer contact details are stored by the demo.
-- Dashboard/report and menu/order endpoints are unauthenticated in this local demo; it is not a production security setup.
+- Dashboard/report, customer menu/order and order-status endpoints are unauthenticated in this local demo. Menu management uses a server-only shared key; this is not a production account system.
 
 ## Tests and build
 

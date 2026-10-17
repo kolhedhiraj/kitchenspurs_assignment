@@ -28,7 +28,8 @@ export default function CheckoutForm({ items, currency, onSuccess }: { items: Ch
         body: JSON.stringify({ items: items.map(({ item, quantity }) => ({ item_id: item.id, quantity })) }),
       });
       const body = await response.json();
-      if (!response.ok) throw new Error(body.message ?? "We could not place your order. Please try again.");
+      const validationMessage = body.errors && Object.values(body.errors as Record<string, string[]>).flat()[0];
+      if (!response.ok) throw new Error(typeof validationMessage === "string" ? validationMessage : body.message ?? "We could not place your order. Please try again.");
       onSuccess(body.order as CreatedOrder);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "We could not place your order. Please try again.");

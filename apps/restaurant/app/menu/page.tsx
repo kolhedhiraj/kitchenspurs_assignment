@@ -21,7 +21,7 @@ export default function MenuPage() {
     track("menu_viewed", { item_count: menu.items.length });
   }, [menu]);
 
-  const categories = ["All", ...new Set(menu?.items.map((item) => item.category) ?? [])];
+  const categories = ["All", ...(menu?.categories.map((category) => category.name) ?? [])];
   const visibleItems = menu?.items.filter((item) => activeCategory === "All" || item.category === activeCategory) ?? [];
   const itemCount = cartItems.reduce((total, line) => total + line.quantity, 0);
   const cartTotal = menu?.items.reduce((total, item) => total + item.price * (cartItems.find((line) => line.item_id === item.id)?.quantity ?? 0), 0) ?? 0;
@@ -51,9 +51,15 @@ function MenuCard({ item, onAdd, quantity, atLimit }: { item: MenuItem; onAdd: (
   };
 
   return <article className="menu-card">
+    <MenuPhoto item={item}/>
     <span className="category">{item.category}</span>
     <h2>{item.name}</h2>
     <p>{detailsOpen ? item.description : "Prepared fresh in our kitchen."}</p>
-    <footer><div className="menu-price"><strong>{formatPrice(item.price)}</strong>{quantity > 0 && <span aria-label={`${quantity} ${item.name} in cart`}>{quantity} in cart</span>}</div><div className="inline-actions"><button className="small-button" onClick={showDetails}>{detailsOpen ? "Hide details" : "View details"}</button><button className="small-button" onClick={onAdd} disabled={atLimit} aria-label={`Add ${item.name} to cart`}>{atLimit ? "Max quantity" : "Add +"}</button></div></footer>
+    <footer><div className="menu-price"><strong>{formatPrice(item.price)}</strong>{item.is_available === false ? <span className="unavailable-label">Currently unavailable</span> : quantity > 0 && <span aria-label={`${quantity} ${item.name} in cart`}>{quantity} in cart</span>}</div><div className="inline-actions"><button className="small-button" onClick={showDetails}>{detailsOpen ? "Hide details" : "View details"}</button><button className="small-button" onClick={onAdd} disabled={atLimit || item.is_available === false} aria-label={`Add ${item.name} to cart`}>{item.is_available === false ? "Unavailable" : atLimit ? "Max quantity" : "Add +"}</button></div></footer>
   </article>;
+}
+
+function MenuPhoto({ item }: { item: MenuItem }) {
+  const [failed, setFailed] = useState(false);
+  return item.image_url && !failed ? <img className="customer-menu-image" src={item.image_url} alt={item.name} onError={() => setFailed(true)}/> : <div className="customer-menu-placeholder" aria-label={`${item.name} image placeholder`}>🍽</div>;
 }

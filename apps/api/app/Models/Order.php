@@ -7,7 +7,14 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Order extends Model
 {
-    protected $fillable = ['total_amount', 'currency'];
+    public const STATUSES = ['pending', 'confirmed', 'preparing', 'out_for_delivery', 'delivered', 'cancelled'];
+
+    public const STATUS_LABELS = [
+        'pending' => 'Pending', 'confirmed' => 'Confirmed', 'preparing' => 'Preparing',
+        'out_for_delivery' => 'Out for Delivery', 'delivered' => 'Delivered', 'cancelled' => 'Cancelled',
+    ];
+
+    protected $fillable = ['total_amount', 'currency', 'status'];
 
     protected function casts(): array
     {

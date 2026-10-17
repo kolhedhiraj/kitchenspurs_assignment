@@ -67,6 +67,44 @@ describe("Dashboard", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("lists orders and updates their status without reloading the dashboard", async () => {
+    const order = { id: 42, status: "pending", status_label: "Pending", amount: 540, currency: "INR", items_count: 2, created_at: "2026-10-15T09:00:00Z", updated_at: "2026-10-15T09:00:00Z", items: [{ item_id: "bowl", name: "Rice Bowl", quantity: 2, line_total: 540 }] };
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/orders")) return Promise.resolve({ ok: true, json: async () => ({ orders: [order] }) });
+      if (init?.method === "PATCH") return Promise.resolve({ ok: true, json: async () => ({ order: { ...order, status: "confirmed", status_label: "Confirmed" } }) });
+      return Promise.resolve({ ok: true, json: async () => report });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Dashboard />);
+    await screen.findByRole("heading", { name: "Analytics" });
+    fireEvent.click(screen.getByRole("button", { name: /Orders/ }));
+    expect(await screen.findByText("Rice Bowl × 2")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("combobox", { name: "Status for order 42" }), { target: { value: "confirmed" } });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/api/v1/orders/42/status"), expect.objectContaining({ method: "PATCH" })));
+    expect((await screen.findAllByText("Confirmed")).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("requires the menu management key and updates availability in place", async () => {
+    const menuItem = { id: "garden-soup", name: "Garden Soup", category: "Starters", description: "Herbs and greens.", price: 180, image_url: null, is_available: true, created_at: "2026-10-15T09:00:00Z", updated_at: "2026-10-15T09:00:00Z" };
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/admin/menu-items/garden-soup/availability")) return Promise.resolve({ ok: true, json: async () => ({ message: "Menu item availability updated.", item: { ...menuItem, is_available: false } }) });
+      if (url.endsWith("/api/v1/admin/menu-items")) return Promise.resolve({ ok: true, json: async () => ({ currency: "INR", categories: ["Starters"], items: [menuItem] }) });
+      return Promise.resolve({ ok: true, json: async () => report });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Dashboard />);
+    await screen.findByRole("heading", { name: "Analytics" });
+    fireEvent.click(screen.getByRole("button", { name: "Menu" }));
+    fireEvent.change(screen.getByLabelText("Menu management key"), { target: { value: "demo-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(await screen.findByText("Garden Soup")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Disable" }));
+    expect(await screen.findByText("Unavailable")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("garden-soup/availability"), expect.objectContaining({ method: "PATCH", headers: expect.objectContaining({ "X-Menu-Management-Key": "demo-key" }) }));
+  });
+
   it("requests yesterday as a single UTC calendar day", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({ ok: true, json: async () => report })
